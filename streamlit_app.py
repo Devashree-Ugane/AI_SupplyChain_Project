@@ -26,21 +26,21 @@ DISTANCE_MAP = {
     'Chennai': {'Mumbai': 1300, 'Delhi': 2200, 'Bangalore': 350, 'Pune': 1200, 'Kolkata': 1600}
 }
 
-def get_distance(city1, city2):
-    if city1 == city2:
+def get_distance(c1, c2):
+    if c1 == c2:
         return 0
-    return DISTANCE_MAP.get(city1, {}).get(city2, 800)
+    return DISTANCE_MAP.get(c1, {}).get(c2, 800)
 
 # =========================
-# 3. SQLITE FUNCTIONS
+# 3. SQLITE SETUP
 # =========================
 def get_conn():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
 def create_table():
     conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS warehouse_data (
             ProductID TEXT,
             StockLevel INTEGER,
@@ -68,7 +68,7 @@ def load_csv_to_db():
     if 'Category' not in df.columns:
         df['Category'] = np.random.choice(
             ['Haircare', 'Skincare', 'Wellness', 'Cosmetics'],
-            size=len(df)
+            len(df)
         )
 
     if 'Budget_INR' not in df.columns:
@@ -93,7 +93,7 @@ def save_data(df):
     conn.close()
 
 # =========================
-# 4. INIT DB + LOAD DATA
+# 4. INIT DB
 # =========================
 create_table()
 
@@ -109,21 +109,21 @@ if 'transaction_history' not in st.session_state:
 df = st.session_state.df
 
 # =========================
-# 5. TOP METRICS
+# 5. METRICS
 # =========================
 m1, m2, m3 = st.columns(3)
 
 m1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
 m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-m3.metric("Settled Transactions", len(st.session_state.transaction_history))
+m3.metric("Transactions", len(st.session_state.transaction_history))
 
 # =========================
-# 6. SEARCH ENGINE
+# 6. SEARCH + TRANSACTIONS
 # =========================
 st.write("---")
-st.subheader("🔍 Strategic Sourcing & Landed Cost Optimization")
+st.subheader("🔍 Strategic Sourcing")
 
-target_sku = st.text_input("Search SKU (e.g., SKU1):").upper()
+target_sku = st.text_input("Search SKU").upper()
 
 if target_sku:
 
@@ -133,11 +133,7 @@ if target_sku:
 
         target_row = sku_rows.iloc[0]
 
-        st.info(
-            f"**Target Node:** {target_row['WarehouseID']} | "
-            f"Budget: ₹{target_row['Budget_INR']:,} | "
-            f"Stock: {target_row['StockLevel']}"
-        )
+        st.info(f"Warehouse: {target_row['WarehouseID']} | Budget: ₹{target_row['Budget_INR']}")
 
         suppliers = df[
             (df['WarehouseID'] != target_row['WarehouseID']) &
@@ -150,14 +146,14 @@ if target_sku:
 
         suppliers = suppliers.sort_values(by='Distance').head(2)
 
-        for idx, supplier in suppliers.iterrows():
+        for idx, s in suppliers.iterrows():
 
             with st.container(border=True):
 
                 c1, c2, c3 = st.columns([2, 1, 1])
 
                 unit_price = target_row['Unit_Price_INR']
-                dist = supplier['Distance']
+                dist = s['Distance']
                 ship_rate = 0.75
 
                 max_affordable = int(
@@ -165,32 +161,31 @@ if target_sku:
                     (unit_price + dist * ship_rate)
                 )
 
-                # FIXED SAFE VALUE (prevents Streamlit error)
-                default_qty = min(max_affordable, supplier['StockLevel'], 5)
+                default_qty = min(max_affordable, s['StockLevel'], 5)
 
-                c1.write(f"### Source: {supplier['WarehouseID']}")
-                c1.write(f"Stock: {supplier['StockLevel']}")
+                c1.write(f"### {s['WarehouseID']}")
+                c1.write(f"Stock: {s['StockLevel']}")
                 c1.write(f"Distance: {dist} km")
 
                 qty = c2.number_input(
-                    f"Qty from {supplier['WarehouseID']}",
+                    "Qty",
                     min_value=0,
-                    max_value=int(supplier['StockLevel']),
+                    max_value=int(s['StockLevel']),
                     value=int(default_qty),
-                    key=f"qty_{idx}"
+                    key=f"q_{idx}"
                 )
 
-                prod_cost = qty * unit_price
-                trans_cost = int(qty * dist * ship_rate)
-                total_cost = prod_cost + trans_cost
+                prod = qty * unit_price
+                freight = int(qty * dist * ship_rate)
+                total = prod + freight
 
-                c2.write(f"Product: ₹{prod_cost:,}")
-                c2.write(f"Freight: ₹{trans_cost:,}")
-                c2.write(f"Total: ₹{total_cost:,}")
+                c2.write(f"Product ₹{prod}")
+                c2.write(f"Freight ₹{freight}")
+                c2.write(f"Total ₹{total}")
 
-                if c3.button("Confirm", key=f"btn_{idx}"):
+                if c3.button("Confirm", key=f"b_{idx}"):
 
-                    if qty > 0 and total_cost <= target_row['Budget_INR']:
+                    if qty > 0 and total <= target_row['Budget_INR']:
 
                         st.session_state.df.loc[
                             st.session_state.df['ProductID'] == target_sku,
@@ -200,73 +195,37 @@ if target_sku:
                         st.session_state.df.loc[
                             st.session_state.df['ProductID'] == target_sku,
                             'Budget_INR'
-                        ] -= total_cost
+                        ] -= total
 
-                        st.session_state.df.loc[
-                            supplier.name,
-                            'StockLevel'
-                        ] -= qty
-
-                        st.session_state.df.loc[
-                            supplier.name,
-                            'Budget_INR'
-                        ] += prod_cost
+                        st.session_state.df.loc[s.name, 'StockLevel'] -= qty
+                        st.session_state.df.loc[s.name, 'Budget_INR'] += prod
 
                         st.session_state.transaction_history.append({
                             "sku": target_sku,
-                            "from": supplier['WarehouseID'],
-                            "to": target_row['WarehouseID'],
+                            "from": s['WarehouseID'],
                             "qty": qty,
-                            "cost": total_cost,
-                            "dist": dist
+                            "cost": total
                         })
 
                         save_data(st.session_state.df)
-
-                        st.success("Transaction Completed")
+                        st.success("Done")
                         st.rerun()
 
-                    else:
-                        st.error("Invalid / Insufficient Budget")
-
 # =========================
-# 7. CATEGORY LEDGER (FIXED + HIGHLIGHT)
+# 7. CATEGORY LEDGER (FIXED HIGHLIGHT)
 # =========================
 st.write("---")
-st.subheader("📋 Category Wise Ledger")
+st.subheader("📋 Category Ledger")
 
 for cat in df['Category'].unique():
 
-    st.markdown(f"### 🏷️ {cat}")
+    st.markdown(f"### {cat}")
 
-    cat_df = df[df['Category'] == cat].copy()
-
-    critical = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] < 40000)]
-    warning = cat_df[(cat_df['StockLevel'] < 10)]
-
-    if not critical.empty:
-        st.error(f"CRITICAL RISK: {len(critical)} nodes")
-    elif not warning.empty:
-        st.warning(f"LOW STOCK: {len(warning)} nodes")
+    cat_df = df[df['Category'] == cat]
 
     def highlight(row):
         if row['StockLevel'] < 10:
-            return ['background-color: #ffcccc'] * len(row)
+            return ['background-color: rgba(255, 0, 0, 0.15)'] * len(row)
         return [''] * len(row)
 
-    st.dataframe(
-        cat_df.style.apply(highlight, axis=1),
-        use_container_width=True
-    )
-
-# =========================
-# 8. TRANSACTION LOG
-# =========================
-if st.session_state.transaction_history:
-
-    st.write("---")
-    st.subheader("📑 Transaction Audit Log")
-
-    for tx in reversed(st.session_state.transaction_history):
-        with st.expander(f"{tx['qty']} units | {tx['from']} → {tx['to']}"):
-            st.write(tx)
+    st.dataframe(cat_df.style.apply(highlight, axis=1), use_container_width=True)
