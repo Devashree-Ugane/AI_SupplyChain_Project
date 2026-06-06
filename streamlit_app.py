@@ -26,6 +26,46 @@ def get_distance(city1, city2):
         return 0
     return DISTANCE_MAP.get(city1, {}).get(city2, 800)
 
+# -------------------- RISK ENGINE --------------------
+def calculate_risk_score(stock, budget, distance_factor):
+    stock_risk = max(0, 100 - stock * 5)
+    budget_risk = max(0, 100 - budget / 3000)
+    distance_risk = min(100, distance_factor / 20)
+
+    score = (0.5 * stock_risk) + (0.3 * budget_risk) + (0.2 * distance_risk)
+    return min(100, round(score))
+
+# -------------------- AUTO REORDER ENGINE --------------------
+def generate_reorder_suggestion(df, target_warehouse):
+    target = df[df['WarehouseID'] == target_warehouse].iloc[0]
+
+    suppliers = df[
+        (df['WarehouseID'] != target_warehouse) &
+        (df['StockLevel'] > 10)
+    ].copy()
+
+    if suppliers.empty:
+        return None
+
+    suppliers['Distance'] = suppliers['WarehouseID'].apply(
+        lambda x: get_distance(target_warehouse, x)
+    )
+
+    suppliers['Score'] = suppliers.apply(
+        lambda x: x['StockLevel'] / (1 + x['Distance']), axis=1
+    )
+
+    best = suppliers.sort_values(by='Score', ascending=False).iloc[0]
+
+    qty = min(int(best['StockLevel'] * 0.2), 20)
+
+    return {
+        "from": best['WarehouseID'],
+        "to": target_warehouse,
+        "qty": max(1, qty),
+        "distance": best['Distance']
+    }
+
 # -------------------- DATA PROCESSING --------------------
 def process_dataframe(df):
     df.rename(columns={
@@ -56,7 +96,7 @@ if 'df' not in st.session_state:
     if os.path.exists(CSV_FILE):
         st.session_state.df = process_dataframe(pd.read_csv(CSV_FILE))
     else:
-        st.error("Critical Error: orders.csv not found.")
+        st.error("orders.csv not found.")
         st.stop()
 
 if 'transaction_history' not in st.session_state:
@@ -65,19 +105,18 @@ if 'transaction_history' not in st.session_state:
 df = st.session_state.df
 
 # -------------------- KPI METRICS --------------------
-m1, m2, m3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
 
-m1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
-m2.metric("Inventory Asset Value",
-          f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-m3.metric("Settled Transactions", len(st.session_state.transaction_history))
+c1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
+c2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
+c3.metric("Transactions", len(st.session_state.transaction_history))
 
 st.write("---")
 
-# -------------------- STRATEGIC SOURCING --------------------
-st.subheader("🔍 Strategic Sourcing & Landed Cost Optimization")
+# -------------------- SOURCING ENGINE --------------------
+st.subheader("🔍 Strategic Sourcing Engine")
 
-target_sku = st.text_input("Search SKU to optimize (e.g., SKU1):").upper()
+target_sku = st.text_input("Enter SKU").upper()
 
 if target_sku:
     sku_rows = df[df['ProductID'] == target_sku]
@@ -86,7 +125,7 @@ if target_sku:
         target_row = sku_rows.loc[sku_rows['StockLevel'].idxmin()]
 
         st.info(
-            f"Target Node: {target_row['WarehouseID']} | "
+            f"Target: {target_row['WarehouseID']} | "
             f"Budget: ₹{target_row['Budget_INR']:,} | "
             f"Stock: {target_row['StockLevel']}"
         )
@@ -110,98 +149,104 @@ if target_sku:
             dist = supplier['Distance']
             ship_rate = 0.75
 
-            max_affordable = int(
-                target_row['Budget_INR'] //
-                (unit_price + (dist * ship_rate))
-            ) if unit_price + (dist * ship_rate) > 0 else 0
-
             safe_max = max(0, int(supplier['StockLevel']))
-            safe_default = min(5, safe_max)
+            qty = st.number_input(
+                f"Qty from {supplier['WarehouseID']}",
+                min_value=0,
+                max_value=safe_max,
+                value=min(5, safe_max),
+                key=f"qty_{idx}"
+            )
+
+            prod_cost = qty * unit_price
+            freight = int(qty * dist * ship_rate)
+            total = prod_cost + freight
 
             with col1:
-                st.write(f"### Source: {supplier['WarehouseID']}")
-                st.write(f"Surplus: {supplier['StockLevel']} units")
+                st.write(f"Supplier: {supplier['WarehouseID']}")
                 st.write(f"Distance: {dist} km")
 
             with col2:
-                move_qty = st.number_input(
-                    f"Qty from {supplier['WarehouseID']}",
-                    min_value=0,
-                    max_value=safe_max,
-                    value=safe_default,
-                    key=f"qty_{idx}"
-                )
-
-                prod_cost = move_qty * unit_price
-                trans_cost = int(move_qty * dist * ship_rate)
-                total_cost = prod_cost + trans_cost
-
-                st.write(f"Product: ₹{prod_cost:,}")
-                st.write(f"Freight: ₹{trans_cost:,}")
-                st.write(f"Total: ₹{total_cost:,}")
+                st.write(f"Product: ₹{prod_cost}")
+                st.write(f"Freight: ₹{freight}")
+                st.write(f"Total: ₹{total}")
 
             with col3:
-                if total_cost > target_row['Budget_INR']:
+                if total > target_row['Budget_INR']:
                     st.error("Insolvent")
-                elif move_qty == 0:
-                    st.warning("Adjust quantity")
-                else:
-                    if st.button(f"Confirm {idx}", key=f"btn_{idx}"):
+                elif st.button(f"Confirm {idx}", key=f"btn_{idx}"):
+                    st.session_state.df.loc[target_row.name, 'StockLevel'] += qty
+                    st.session_state.df.loc[target_row.name, 'Budget_INR'] -= total
 
-                        st.session_state.df.loc[target_row.name, 'StockLevel'] += move_qty
-                        st.session_state.df.loc[target_row.name, 'Budget_INR'] -= total_cost
+                    st.session_state.df.loc[supplier.name, 'StockLevel'] -= qty
+                    st.session_state.df.loc[supplier.name, 'Budget_INR'] += prod_cost
 
-                        st.session_state.df.loc[supplier.name, 'StockLevel'] -= move_qty
-                        st.session_state.df.loc[supplier.name, 'Budget_INR'] += prod_cost
+                    st.session_state.transaction_history.append({
+                        "sku": target_sku,
+                        "from": supplier['WarehouseID'],
+                        "to": target_row['WarehouseID'],
+                        "qty": qty,
+                        "value": total
+                    })
 
-                        st.session_state.transaction_history.append({
-                            "sku": target_sku,
-                            "from": supplier['WarehouseID'],
-                            "to": target_row['WarehouseID'],
-                            "qty": move_qty,
-                            "val": total_cost,
-                            "dist": dist
-                        })
+                    save_data(st.session_state.df)
+                    st.success("Transaction Complete")
+                    st.rerun()
 
-                        save_data(st.session_state.df)
-                        st.success("Transaction Completed")
-                        st.rerun()
-
-# -------------------- CATEGORY LEDGER (FIXED & CLEAN) --------------------
+# -------------------- AUTO REORDER ENGINE UI --------------------
 st.write("---")
-st.subheader("📋 Segmented Operational Ledgers")
+st.subheader("🔁 Auto Reorder Intelligence")
+
+low_nodes = df[df['StockLevel'] < 10]['WarehouseID'].unique()
+
+if len(low_nodes) > 0:
+    for node in low_nodes:
+        sug = generate_reorder_suggestion(df, node)
+
+        if sug:
+            st.info(
+                f"""
+                From: {sug['from']}
+                To: {sug['to']}
+                Qty: {sug['qty']}
+                Distance: {sug['distance']} km
+                """
+            )
+else:
+    st.success("All systems stable")
+
+# -------------------- CATEGORY LEDGER --------------------
+st.write("---")
+st.subheader("📋 Category Ledger")
 
 for cat in sorted(df['Category'].unique()):
-    st.markdown(f"### 🏷️ {cat}")
+    st.markdown(f"### {cat}")
 
     cat_df = df[df['Category'] == cat].copy()
 
-    critical_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] < 40000)]
-    stock_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] >= 40000)]
+    # Risk Score
+    cat_df["RiskScore"] = cat_df.apply(
+        lambda r: calculate_risk_score(
+            r["StockLevel"],
+            r["Budget_INR"],
+            get_distance(r["WarehouseID"], "Mumbai")
+        ),
+        axis=1
+    )
 
-    if not critical_risk.empty:
-        st.error(f"🔴 Critical Risk Nodes: {len(critical_risk)}")
-    elif not stock_risk.empty:
-        st.warning(f"🟡 Low Stock Nodes: {len(stock_risk)}")
-
-    # SAFE HIGHLIGHT FUNCTION
-    def highlight_rows(row):
+    def style(row):
         if row['StockLevel'] < 10 and row['Budget_INR'] < 40000:
             return ['background-color:#ffdddd; color:black'] * len(row)
         elif row['StockLevel'] < 10:
             return ['background-color:#fff4cc; color:black'] * len(row)
-        else:
-            return [''] * len(row)
+        return [''] * len(row)
 
-    styled_df = cat_df.style.apply(highlight_rows, axis=1)
+    st.dataframe(cat_df.style.apply(style, axis=1), width='stretch')
 
-    st.dataframe(styled_df, width='stretch')
-
-# -------------------- TRANSACTION AUDIT --------------------
+# -------------------- TRANSACTIONS --------------------
 if st.session_state.transaction_history:
     st.write("---")
-    st.subheader("📑 Transaction Audit Log")
+    st.subheader("📑 Transaction Log")
 
     for tx in reversed(st.session_state.transaction_history):
-        with st.expander(f"{tx['qty']} units | {tx['from']} ➜ {tx['to']}"):
-            st.json(tx)
+        st.json(tx)
