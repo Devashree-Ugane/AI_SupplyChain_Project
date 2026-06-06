@@ -40,7 +40,6 @@ def get_conn():
 def create_table():
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS warehouse_data (
             ProductID TEXT,
@@ -51,12 +50,10 @@ def create_table():
             Unit_Price_INR INTEGER
         )
     """)
-
     conn.commit()
     conn.close()
 
 def load_csv_to_db():
-    """Run only once when DB is first created"""
     if not os.path.exists(CSV_FILE):
         return
 
@@ -96,12 +93,10 @@ def save_data(df):
     conn.close()
 
 # =========================
-# 4. INIT DB (SAFE)
+# 4. INIT DB
 # =========================
 create_table()
 
-# IMPORTANT FIX:
-# Always migrate if DB is empty (not only file check)
 conn_test = get_conn()
 cursor = conn_test.cursor()
 cursor.execute("SELECT COUNT(*) FROM warehouse_data")
@@ -123,7 +118,45 @@ if 'transaction_history' not in st.session_state:
 df = st.session_state.df
 
 # =========================
-# 6. METRICS
+# 6. RISK SCORE ENGINE + AUTO REORDER (NEW)
+# =========================
+def compute_risk(row):
+    stock_risk = max(0, 100 - row['StockLevel'] * 5)
+    budget_risk = max(0, 100 - row['Budget_INR'] / 5000)
+    distance_risk = np.mean([
+        get_distance(row['WarehouseID'], w) for w in df['WarehouseID'].unique()
+    ]) / 50
+
+    score = 0.5 * stock_risk + 0.3 * budget_risk + 0.2 * distance_risk
+    return min(100, int(score))
+
+df['RiskScore'] = df.apply(compute_risk, axis=1)
+
+def auto_reorder(df):
+    suggestions = []
+
+    for _, row in df.iterrows():
+        if row['RiskScore'] > 60:
+            suppliers = df[
+                (df['WarehouseID'] != row['WarehouseID']) &
+                (df['StockLevel'] > 10)
+            ]
+
+            if not suppliers.empty:
+                best = suppliers.sort_values('StockLevel', ascending=False).iloc[0]
+
+                qty = min(20, int(best['StockLevel'] * 0.1))
+
+                suggestions.append(
+                    f"{row['WarehouseID']} should request {qty} units from {best['WarehouseID']}"
+                )
+
+    return suggestions
+
+reorder_plan = auto_reorder(df)
+
+# =========================
+# 7. METRICS
 # =========================
 m1, m2, m3 = st.columns(3)
 
@@ -132,7 +165,19 @@ m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR'
 m3.metric("Transactions", len(st.session_state.transaction_history))
 
 # =========================
-# 7. SEARCH + TRANSACTIONS
+# 8. AUTO REORDER DISPLAY
+# =========================
+st.write("---")
+st.subheader("🔁 Auto Reorder AI System")
+
+if reorder_plan:
+    for r in reorder_plan:
+        st.info(r)
+else:
+    st.success("All warehouses are healthy")
+
+# =========================
+# 9. SEARCH + TRANSACTIONS
 # =========================
 st.write("---")
 st.subheader("🔍 Strategic Sourcing")
@@ -181,7 +226,6 @@ if target_sku:
                 c1.write(f"Stock: {s['StockLevel']}")
                 c1.write(f"Distance: {dist} km")
 
-                # FIX: prevent Streamlit max error
                 safe_max = max(0, int(s['StockLevel']))
                 safe_default = min(int(default_qty), safe_max) if safe_max > 0 else 0
 
@@ -230,7 +274,7 @@ if target_sku:
                         st.rerun()
 
 # =========================
-# 8. CATEGORY LEDGER (FIXED + SAFE HIGHLIGHT)
+# 10. CATEGORY LEDGER
 # =========================
 st.write("---")
 st.subheader("📋 Category Ledger")
@@ -246,6 +290,4 @@ for cat in df['Category'].unique():
             return ['background-color: rgba(255, 0, 0, 0.12)'] * len(row)
         return [''] * len(row)
 
-    styled = cat_df.style.apply(highlight, axis=1)
-
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(cat_df.style.apply(highlight, axis=1), use_container_width=True)
