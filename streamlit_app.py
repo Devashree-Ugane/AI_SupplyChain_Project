@@ -7,9 +7,11 @@ import plotly.express as px
 
 warnings.filterwarnings("ignore")
 
+# =========================
+# APP CONFIG
+# =========================
 st.set_page_config(page_title="AI Supply Chain", layout="wide")
-
-st.title("🏛️ AI Supply Chain: Intelligent Logistics & Risk Engine")
+st.title("🏛️ AI Supply Chain: Logistics + Risk + Intelligence Engine")
 
 CSV_FILE = "orders.csv"
 
@@ -30,7 +32,7 @@ def get_distance(a, b):
     return DISTANCE_MAP.get(a, {}).get(b, 800)
 
 # =========================
-# DATA PREP
+# DATA PROCESSING
 # =========================
 def process_dataframe(df):
     df.rename(columns={
@@ -57,74 +59,69 @@ def save_data(df):
     df.to_csv(CSV_FILE, index=False)
 
 # =========================
-# LOAD STATE
+# LOAD DATA
 # =========================
 if 'df' not in st.session_state:
     if os.path.exists(CSV_FILE):
         st.session_state.df = process_dataframe(pd.read_csv(CSV_FILE))
     else:
-        st.error("orders.csv missing")
+        st.error("orders.csv not found")
         st.stop()
-
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
 
 if 'transactions' not in st.session_state:
     st.session_state.transactions = []
 
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
 df = st.session_state.df
 
 # =========================
-# KPI SECTION
+# KPI DASHBOARD
 # =========================
 st.subheader("📊 KPI Dashboard")
 
 c1, c2, c3 = st.columns(3)
 
-c1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
-c2.metric("Inventory Value",
-          f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
+c1.metric("Liquidity", f"₹{df['Budget_INR'].sum():,}")
+c2.metric("Inventory Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
 c3.metric("Transactions", len(st.session_state.transactions))
 
 # =========================
 # CHARTS
 # =========================
-st.subheader("📈 Analytics Dashboard")
+st.subheader("📈 Analytics")
 
-fig1 = px.bar(df.groupby("WarehouseID")["StockLevel"].sum().reset_index(),
-              x="WarehouseID", y="StockLevel",
-              title="Stock Distribution")
+chart_df = df.groupby("WarehouseID")["StockLevel"].sum().reset_index()
 
-st.plotly_chart(fig1, use_container_width=True)
+fig = px.bar(chart_df, x="WarehouseID", y="StockLevel", title="Stock by Warehouse")
+st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# AI CHATBOT PANEL (NEW)
+# AI CHAT PANEL (SAFE VERSION)
 # =========================
-st.subheader("🤖 AI Supply Chain Assistant")
+st.subheader("🤖 AI Assistant")
 
-user_query = st.text_input("Ask something like: Which nodes are at risk?")
+query = st.text_input("Ask: Which nodes are at risk? / Optimize supply chain")
 
-if user_query:
-    # lightweight rule-based + placeholder for Groq integration
-    risk_nodes = df[df['StockLevel'] < 10]
+if query:
+    risk_df = df[df['StockLevel'] < 10]
 
-    if "risk" in user_query.lower():
-        st.success("AI Insight Generated:")
+    if "risk" in query.lower():
+        st.warning("🔴 Risk Analysis Engine")
 
-        st.write("### 🔴 Risk Analysis")
-        st.write(f"{len(risk_nodes)} nodes are at risk due to low stock.")
+        st.write(f"Total Risk Nodes: {len(risk_df)}")
 
-        st.write("### 📍 Affected Warehouses")
-        st.write(risk_nodes[['WarehouseID', 'StockLevel']])
+        st.dataframe(risk_df[['WarehouseID', 'StockLevel', 'Category']])
 
     else:
-        st.info("AI Response (simulated): Connect Groq API here for full LLM responses.")
+        st.info("AI Response placeholder — connect Groq API here for full intelligence layer.")
 
 # =========================
 # SUPPLY CHAIN ENGINE
 # =========================
 st.write("---")
-st.subheader("🔍 Supply Chain Optimization Engine")
+st.subheader("🔍 Supply Chain Optimization")
 
 sku = st.text_input("Enter SKU").upper()
 
@@ -141,7 +138,7 @@ if sku:
         """)
 
         suppliers = df[(df['WarehouseID'] != target['WarehouseID']) &
-                        (df['StockLevel'] > 0)].copy()
+                       (df['StockLevel'] > 0)].copy()
 
         suppliers['Distance'] = suppliers['WarehouseID'].apply(
             lambda x: get_distance(target['WarehouseID'], x)
@@ -157,15 +154,13 @@ if sku:
             dist = s['Distance']
             ship_rate = 0.75
 
-            max_affordable = int(target['Budget_INR'] // max(1, unit_price + dist * ship_rate))
-
             safe_max = max(1, int(s['StockLevel']))
 
             qty = st.number_input(
                 f"Qty from {s['WarehouseID']}",
                 min_value=0,
                 max_value=safe_max,
-                value=min(5, safe_max),
+                value=min(3, safe_max),
                 key=f"qty_{i}"
             )
 
@@ -187,18 +182,18 @@ if sku:
                         "from": s['WarehouseID'],
                         "to": target['WarehouseID'],
                         "qty": qty,
-                        "value": total
+                        "cost": total
                     })
 
                     save_data(st.session_state.df)
-                    st.success("Transaction Complete")
+                    st.success("Transaction Completed")
                     st.rerun()
 
 # =========================
-# CATEGORY LEDGER (RESTORED + RISK HIGHLIGHT)
+# CATEGORY LEDGER (FIXED + SAFE RISK MARKING)
 # =========================
 st.write("---")
-st.subheader("📋 Category-wise Ledger")
+st.subheader("📋 Category Ledger")
 
 for cat in df['Category'].unique():
     st.markdown(f"### 🏷️ {cat}")
@@ -208,20 +203,21 @@ for cat in df['Category'].unique():
     risk = cat_df[cat_df['StockLevel'] < 10]
 
     if not risk.empty:
-        st.error(f"🔴 {len(risk)} RISK nodes in {cat}")
+        st.error(f"🔴 {len(risk)} risk nodes detected")
 
-    styled = cat_df.style.apply(
-        lambda x: ['background-color: #ffcccc' if v < 10 else '' for v in x['StockLevel']],
-        axis=1
+    # SAFE DISPLAY (NO STYLER CRASH)
+    display_df = cat_df.copy()
+    display_df["Risk_Flag"] = display_df["StockLevel"].apply(
+        lambda x: "🔴 LOW" if x < 10 else "🟢 OK"
     )
 
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(display_df, use_container_width=True)
 
 # =========================
-# TRANSACTION LOG
+# TRANSACTION HISTORY
 # =========================
 st.write("---")
 st.subheader("📑 Transaction History")
 
-for t in reversed(st.session_state.transactions):
-    st.write(t)
+if st.session_state.transactions:
+    st.dataframe(pd.DataFrame(st.session_state.transactions))
