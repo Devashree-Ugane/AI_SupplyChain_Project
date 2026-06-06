@@ -5,3 +5,4 @@ faiss-cpu
 sentence-transformers
 plotly
 groq
+fpdf2
