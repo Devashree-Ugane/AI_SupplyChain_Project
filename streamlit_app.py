@@ -40,6 +40,7 @@ def get_conn():
 def create_table():
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS warehouse_data (
             ProductID TEXT,
@@ -50,10 +51,12 @@ def create_table():
             Unit_Price_INR INTEGER
         )
     """)
+
     conn.commit()
     conn.close()
 
 def load_csv_to_db():
+    """Run only once when DB is first created"""
     if not os.path.exists(CSV_FILE):
         return
 
@@ -93,13 +96,24 @@ def save_data(df):
     conn.close()
 
 # =========================
-# 4. INIT DB
+# 4. INIT DB (SAFE)
 # =========================
 create_table()
 
-if not os.path.exists(DB_FILE):
+# IMPORTANT FIX:
+# Always migrate if DB is empty (not only file check)
+conn_test = get_conn()
+cursor = conn_test.cursor()
+cursor.execute("SELECT COUNT(*) FROM warehouse_data")
+count = cursor.fetchone()[0]
+conn_test.close()
+
+if count == 0:
     load_csv_to_db()
 
+# =========================
+# 5. SESSION STATE
+# =========================
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
@@ -109,7 +123,7 @@ if 'transaction_history' not in st.session_state:
 df = st.session_state.df
 
 # =========================
-# 5. METRICS
+# 6. METRICS
 # =========================
 m1, m2, m3 = st.columns(3)
 
@@ -118,7 +132,7 @@ m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR'
 m3.metric("Transactions", len(st.session_state.transaction_history))
 
 # =========================
-# 6. SEARCH + TRANSACTIONS
+# 7. SEARCH + TRANSACTIONS
 # =========================
 st.write("---")
 st.subheader("🔍 Strategic Sourcing")
@@ -167,11 +181,15 @@ if target_sku:
                 c1.write(f"Stock: {s['StockLevel']}")
                 c1.write(f"Distance: {dist} km")
 
+                # FIX: prevent Streamlit max error
+                safe_max = max(0, int(s['StockLevel']))
+                safe_default = min(int(default_qty), safe_max) if safe_max > 0 else 0
+
                 qty = c2.number_input(
                     "Qty",
                     min_value=0,
-                    max_value=int(s['StockLevel']),
-                    value=int(default_qty),
+                    max_value=safe_max,
+                    value=safe_default,
                     key=f"q_{idx}"
                 )
 
@@ -212,7 +230,7 @@ if target_sku:
                         st.rerun()
 
 # =========================
-# 7. CATEGORY LEDGER (FIXED HIGHLIGHT)
+# 8. CATEGORY LEDGER (FIXED + SAFE HIGHLIGHT)
 # =========================
 st.write("---")
 st.subheader("📋 Category Ledger")
@@ -225,7 +243,9 @@ for cat in df['Category'].unique():
 
     def highlight(row):
         if row['StockLevel'] < 10:
-            return ['background-color: rgba(255, 0, 0, 0.15)'] * len(row)
+            return ['background-color: rgba(255, 0, 0, 0.12)'] * len(row)
         return [''] * len(row)
 
-    st.dataframe(cat_df.style.apply(highlight, axis=1), use_container_width=True)
+    styled = cat_df.style.apply(highlight, axis=1)
+
+    st.dataframe(styled, use_container_width=True)
