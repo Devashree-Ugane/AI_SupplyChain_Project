@@ -74,7 +74,7 @@ m3.metric("Settled Transactions", len(st.session_state.transaction_history))
 
 st.write("---")
 
-# -------------------- CORE SEARCH --------------------
+# -------------------- STRATEGIC SOURCING --------------------
 st.subheader("🔍 Strategic Sourcing & Landed Cost Optimization")
 
 target_sku = st.text_input("Search SKU to optimize (e.g., SKU1):").upper()
@@ -104,8 +104,6 @@ if target_sku:
 
         for idx, supplier in suppliers.iterrows():
 
-            st.container(border=True)
-
             col1, col2, col3 = st.columns([2, 1, 1])
 
             unit_price = target_row['Unit_Price_INR']
@@ -117,7 +115,6 @@ if target_sku:
                 (unit_price + (dist * ship_rate))
             ) if unit_price + (dist * ship_rate) > 0 else 0
 
-            # ---------------- SAFE NUMBER INPUT FIX ----------------
             safe_max = max(0, int(supplier['StockLevel']))
             safe_default = min(5, safe_max)
 
@@ -170,7 +167,7 @@ if target_sku:
                         st.success("Transaction Completed")
                         st.rerun()
 
-# -------------------- CATEGORY LEDGER (FIXED) --------------------
+# -------------------- CATEGORY LEDGER (FIXED & CLEAN) --------------------
 st.write("---")
 st.subheader("📋 Segmented Operational Ledgers")
 
@@ -179,7 +176,6 @@ for cat in sorted(df['Category'].unique()):
 
     cat_df = df[df['Category'] == cat].copy()
 
-    # ---------------- RISK FLAGS ----------------
     critical_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] < 40000)]
     stock_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] >= 40000)]
 
@@ -188,17 +184,18 @@ for cat in sorted(df['Category'].unique()):
     elif not stock_risk.empty:
         st.warning(f"🟡 Low Stock Nodes: {len(stock_risk)}")
 
-    # ---------------- SAFE STYLING FIX ----------------
-    def highlight_row(row):
+    # SAFE HIGHLIGHT FUNCTION
+    def highlight_rows(row):
         if row['StockLevel'] < 10 and row['Budget_INR'] < 40000:
-            return ['background-color:#ffcccc'] * len(row)
+            return ['background-color:#ffdddd; color:black'] * len(row)
         elif row['StockLevel'] < 10:
-            return ['background-color:#fff3cd'] * len(row)
-        return [''] * len(row)
+            return ['background-color:#fff4cc; color:black'] * len(row)
+        else:
+            return [''] * len(row)
 
-    styled = cat_df.style.apply(highlight_row, axis=1)
+    styled_df = cat_df.style.apply(highlight_rows, axis=1)
 
-    st.dataframe(styled, width='stretch')
+    st.dataframe(styled_df, width='stretch')
 
 # -------------------- TRANSACTION AUDIT --------------------
 if st.session_state.transaction_history:
@@ -207,4 +204,4 @@ if st.session_state.transaction_history:
 
     for tx in reversed(st.session_state.transaction_history):
         with st.expander(f"{tx['qty']} units | {tx['from']} ➜ {tx['to']}"):
-            st.write(tx)
+            st.json(tx)
