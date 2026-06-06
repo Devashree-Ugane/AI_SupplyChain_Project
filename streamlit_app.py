@@ -3,21 +3,16 @@ import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 
 warnings.filterwarnings("ignore")
 
-# =========================
-# APP CONFIG
-# =========================
-st.set_page_config(page_title="AI Supply Chain", layout="wide")
-st.title("🏛️ AI Supply Chain: Logistics + Risk + Intelligence Engine")
+# -------------------- PAGE CONFIG --------------------
+st.set_page_config(page_title="Strategic Supply Chain", layout="wide")
+st.title("🏛️ AI Supply Chain: Logistics, Solvency & Multi-Entity Ledger")
 
 CSV_FILE = "orders.csv"
 
-# =========================
-# DISTANCE MAP
-# =========================
+# -------------------- DISTANCE MAP --------------------
 DISTANCE_MAP = {
     'Mumbai': {'Delhi': 1400, 'Bangalore': 1000, 'Pune': 150, 'Chennai': 1300, 'Kolkata': 1900},
     'Delhi': {'Mumbai': 1400, 'Bangalore': 2100, 'Pune': 1450, 'Chennai': 2200, 'Kolkata': 1500},
@@ -26,14 +21,12 @@ DISTANCE_MAP = {
     'Chennai': {'Mumbai': 1300, 'Delhi': 2200, 'Bangalore': 350, 'Pune': 1200, 'Kolkata': 1600}
 }
 
-def get_distance(a, b):
-    if a == b:
+def get_distance(city1, city2):
+    if city1 == city2:
         return 0
-    return DISTANCE_MAP.get(a, {}).get(b, 800)
+    return DISTANCE_MAP.get(city1, {}).get(city2, 800)
 
-# =========================
-# DATA PROCESSING
-# =========================
+# -------------------- DATA PROCESSING --------------------
 def process_dataframe(df):
     df.rename(columns={
         'SKU': 'ProductID',
@@ -44,7 +37,7 @@ def process_dataframe(df):
     if 'Category' not in df.columns:
         df['Category'] = np.random.choice(
             ['Haircare', 'Skincare', 'Wellness', 'Cosmetics'],
-            len(df)
+            size=len(df)
         )
 
     if 'Budget_INR' not in df.columns:
@@ -58,166 +51,160 @@ def process_dataframe(df):
 def save_data(df):
     df.to_csv(CSV_FILE, index=False)
 
-# =========================
-# LOAD DATA
-# =========================
+# -------------------- LOAD STATE --------------------
 if 'df' not in st.session_state:
     if os.path.exists(CSV_FILE):
         st.session_state.df = process_dataframe(pd.read_csv(CSV_FILE))
     else:
-        st.error("orders.csv not found")
+        st.error("Critical Error: orders.csv not found.")
         st.stop()
 
-if 'transactions' not in st.session_state:
-    st.session_state.transactions = []
-
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
+if 'transaction_history' not in st.session_state:
+    st.session_state.transaction_history = []
 
 df = st.session_state.df
 
-# =========================
-# KPI DASHBOARD
-# =========================
-st.subheader("📊 KPI Dashboard")
+# -------------------- KPI METRICS --------------------
+m1, m2, m3 = st.columns(3)
 
-c1, c2, c3 = st.columns(3)
+m1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
+m2.metric("Inventory Asset Value",
+          f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
+m3.metric("Settled Transactions", len(st.session_state.transaction_history))
 
-c1.metric("Liquidity", f"₹{df['Budget_INR'].sum():,}")
-c2.metric("Inventory Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-c3.metric("Transactions", len(st.session_state.transactions))
-
-# =========================
-# CHARTS
-# =========================
-st.subheader("📈 Analytics")
-
-chart_df = df.groupby("WarehouseID")["StockLevel"].sum().reset_index()
-
-fig = px.bar(chart_df, x="WarehouseID", y="StockLevel", title="Stock by Warehouse")
-st.plotly_chart(fig, use_container_width=True)
-
-# =========================
-# AI CHAT PANEL (SAFE VERSION)
-# =========================
-st.subheader("🤖 AI Assistant")
-
-query = st.text_input("Ask: Which nodes are at risk? / Optimize supply chain")
-
-if query:
-    risk_df = df[df['StockLevel'] < 10]
-
-    if "risk" in query.lower():
-        st.warning("🔴 Risk Analysis Engine")
-
-        st.write(f"Total Risk Nodes: {len(risk_df)}")
-
-        st.dataframe(risk_df[['WarehouseID', 'StockLevel', 'Category']])
-
-    else:
-        st.info("AI Response placeholder — connect Groq API here for full intelligence layer.")
-
-# =========================
-# SUPPLY CHAIN ENGINE
-# =========================
 st.write("---")
-st.subheader("🔍 Supply Chain Optimization")
 
-sku = st.text_input("Enter SKU").upper()
+# -------------------- CORE SEARCH --------------------
+st.subheader("🔍 Strategic Sourcing & Landed Cost Optimization")
 
-if sku:
-    sku_rows = df[df['ProductID'] == sku]
+target_sku = st.text_input("Search SKU to optimize (e.g., SKU1):").upper()
+
+if target_sku:
+    sku_rows = df[df['ProductID'] == target_sku]
 
     if not sku_rows.empty:
-        target = sku_rows.loc[sku_rows['StockLevel'].idxmin()]
+        target_row = sku_rows.loc[sku_rows['StockLevel'].idxmin()]
 
-        st.info(f"""
-        Target Warehouse: {target['WarehouseID']}
-        Budget: ₹{target['Budget_INR']:,}
-        Stock: {target['StockLevel']}
-        """)
-
-        suppliers = df[(df['WarehouseID'] != target['WarehouseID']) &
-                       (df['StockLevel'] > 0)].copy()
-
-        suppliers['Distance'] = suppliers['WarehouseID'].apply(
-            lambda x: get_distance(target['WarehouseID'], x)
+        st.info(
+            f"Target Node: {target_row['WarehouseID']} | "
+            f"Budget: ₹{target_row['Budget_INR']:,} | "
+            f"Stock: {target_row['StockLevel']}"
         )
 
-        suppliers = suppliers.sort_values("Distance").head(2)
+        suppliers = df[
+            (df['WarehouseID'] != target_row['WarehouseID']) &
+            (df['StockLevel'] > 5)
+        ].copy()
 
-        for i, s in suppliers.iterrows():
+        suppliers['Distance'] = suppliers['WarehouseID'].apply(
+            lambda x: get_distance(target_row['WarehouseID'], x)
+        )
 
-            st.markdown("---")
+        suppliers = suppliers.sort_values(by='Distance').head(2)
 
-            unit_price = target['Unit_Price_INR']
-            dist = s['Distance']
+        for idx, supplier in suppliers.iterrows():
+
+            st.container(border=True)
+
+            col1, col2, col3 = st.columns([2, 1, 1])
+
+            unit_price = target_row['Unit_Price_INR']
+            dist = supplier['Distance']
             ship_rate = 0.75
 
-            safe_max = max(1, int(s['StockLevel']))
+            max_affordable = int(
+                target_row['Budget_INR'] //
+                (unit_price + (dist * ship_rate))
+            ) if unit_price + (dist * ship_rate) > 0 else 0
 
-            qty = st.number_input(
-                f"Qty from {s['WarehouseID']}",
-                min_value=0,
-                max_value=safe_max,
-                value=min(3, safe_max),
-                key=f"qty_{i}"
-            )
+            # ---------------- SAFE NUMBER INPUT FIX ----------------
+            safe_max = max(0, int(supplier['StockLevel']))
+            safe_default = min(5, safe_max)
 
-            total = qty * unit_price + qty * dist * ship_rate
+            with col1:
+                st.write(f"### Source: {supplier['WarehouseID']}")
+                st.write(f"Surplus: {supplier['StockLevel']} units")
+                st.write(f"Distance: {dist} km")
 
-            st.write(f"Total Cost: ₹{total:,.0f}")
+            with col2:
+                move_qty = st.number_input(
+                    f"Qty from {supplier['WarehouseID']}",
+                    min_value=0,
+                    max_value=safe_max,
+                    value=safe_default,
+                    key=f"qty_{idx}"
+                )
 
-            if st.button(f"Execute {s['WarehouseID']}", key=f"btn_{i}"):
+                prod_cost = move_qty * unit_price
+                trans_cost = int(move_qty * dist * ship_rate)
+                total_cost = prod_cost + trans_cost
 
-                if qty > 0 and total <= target['Budget_INR']:
+                st.write(f"Product: ₹{prod_cost:,}")
+                st.write(f"Freight: ₹{trans_cost:,}")
+                st.write(f"Total: ₹{total_cost:,}")
 
-                    st.session_state.df.loc[target.name, 'StockLevel'] += qty
-                    st.session_state.df.loc[target.name, 'Budget_INR'] -= total
+            with col3:
+                if total_cost > target_row['Budget_INR']:
+                    st.error("Insolvent")
+                elif move_qty == 0:
+                    st.warning("Adjust quantity")
+                else:
+                    if st.button(f"Confirm {idx}", key=f"btn_{idx}"):
 
-                    st.session_state.df.loc[s.name, 'StockLevel'] -= qty
-                    st.session_state.df.loc[s.name, 'Budget_INR'] += qty * unit_price
+                        st.session_state.df.loc[target_row.name, 'StockLevel'] += move_qty
+                        st.session_state.df.loc[target_row.name, 'Budget_INR'] -= total_cost
 
-                    st.session_state.transactions.append({
-                        "from": s['WarehouseID'],
-                        "to": target['WarehouseID'],
-                        "qty": qty,
-                        "cost": total
-                    })
+                        st.session_state.df.loc[supplier.name, 'StockLevel'] -= move_qty
+                        st.session_state.df.loc[supplier.name, 'Budget_INR'] += prod_cost
 
-                    save_data(st.session_state.df)
-                    st.success("Transaction Completed")
-                    st.rerun()
+                        st.session_state.transaction_history.append({
+                            "sku": target_sku,
+                            "from": supplier['WarehouseID'],
+                            "to": target_row['WarehouseID'],
+                            "qty": move_qty,
+                            "val": total_cost,
+                            "dist": dist
+                        })
 
-# =========================
-# CATEGORY LEDGER (FIXED + SAFE RISK MARKING)
-# =========================
+                        save_data(st.session_state.df)
+                        st.success("Transaction Completed")
+                        st.rerun()
+
+# -------------------- CATEGORY LEDGER (FIXED) --------------------
 st.write("---")
-st.subheader("📋 Category Ledger")
+st.subheader("📋 Segmented Operational Ledgers")
 
-for cat in df['Category'].unique():
+for cat in sorted(df['Category'].unique()):
     st.markdown(f"### 🏷️ {cat}")
 
-    cat_df = df[df['Category'] == cat]
+    cat_df = df[df['Category'] == cat].copy()
 
-    risk = cat_df[cat_df['StockLevel'] < 10]
+    # ---------------- RISK FLAGS ----------------
+    critical_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] < 40000)]
+    stock_risk = cat_df[(cat_df['StockLevel'] < 10) & (cat_df['Budget_INR'] >= 40000)]
 
-    if not risk.empty:
-        st.error(f"🔴 {len(risk)} risk nodes detected")
+    if not critical_risk.empty:
+        st.error(f"🔴 Critical Risk Nodes: {len(critical_risk)}")
+    elif not stock_risk.empty:
+        st.warning(f"🟡 Low Stock Nodes: {len(stock_risk)}")
 
-    # SAFE DISPLAY (NO STYLER CRASH)
-    display_df = cat_df.copy()
-    display_df["Risk_Flag"] = display_df["StockLevel"].apply(
-        lambda x: "🔴 LOW" if x < 10 else "🟢 OK"
-    )
+    # ---------------- SAFE STYLING FIX ----------------
+    def highlight_row(row):
+        if row['StockLevel'] < 10 and row['Budget_INR'] < 40000:
+            return ['background-color:#ffcccc'] * len(row)
+        elif row['StockLevel'] < 10:
+            return ['background-color:#fff3cd'] * len(row)
+        return [''] * len(row)
 
-    st.dataframe(display_df, use_container_width=True)
+    styled = cat_df.style.apply(highlight_row, axis=1)
 
-# =========================
-# TRANSACTION HISTORY
-# =========================
-st.write("---")
-st.subheader("📑 Transaction History")
+    st.dataframe(styled, width='stretch')
 
-if st.session_state.transactions:
-    st.dataframe(pd.DataFrame(st.session_state.transactions))
+# -------------------- TRANSACTION AUDIT --------------------
+if st.session_state.transaction_history:
+    st.write("---")
+    st.subheader("📑 Transaction Audit Log")
+
+    for tx in reversed(st.session_state.transaction_history):
+        with st.expander(f"{tx['qty']} units | {tx['from']} ➜ {tx['to']}"):
+            st.write(tx)
