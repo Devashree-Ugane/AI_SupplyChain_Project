@@ -6,6 +6,7 @@ import numpy as np
 import sqlite3
 import requests
 import time
+import json
 
 # =========================
 # 1. SETUP
@@ -86,6 +87,23 @@ def create_table():
             Unit_Price_INR INTEGER
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            sku TEXT,
+            from_warehouse TEXT,
+            to_warehouse TEXT,
+            qty INTEGER,
+            unit_price INTEGER,
+            freight_cost INTEGER,
+            total_cost INTEGER,
+            from_stock_after INTEGER,
+            to_stock_after INTEGER,
+            from_budget_after INTEGER,
+            to_budget_after INTEGER
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -121,6 +139,36 @@ def save_data(df):
     df.to_sql("warehouse_data", conn, if_exists="replace", index=False)
     conn.close()
 
+def save_transaction(sku, from_wh, to_wh, qty, unit_price, freight, total,
+                     from_stock_after, to_stock_after, from_budget_after, to_budget_after):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO transactions (
+            timestamp, sku, from_warehouse, to_warehouse,
+            qty, unit_price, freight_cost, total_cost,
+            from_stock_after, to_stock_after,
+            from_budget_after, to_budget_after
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        sku, from_wh, to_wh,
+        qty, unit_price, freight, total,
+        from_stock_after, to_stock_after,
+        from_budget_after, to_budget_after
+    ))
+    conn.commit()
+    conn.close()
+
+def load_transactions():
+    conn = get_conn()
+    try:
+        df = pd.read_sql("SELECT * FROM transactions ORDER BY id DESC", conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
+
 # =========================
 # 5. INIT DB
 # =========================
@@ -138,8 +186,6 @@ if count == 0:
 # =========================
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
-if 'transaction_history' not in st.session_state:
-    st.session_state.transaction_history = []
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 
@@ -186,29 +232,25 @@ def compute_risk(row):
     distance_risk = np.mean([
         get_distance(row['WarehouseID'], w) for w in df['WarehouseID'].unique()
     ]) / 50
-
     score = 0.5 * stock_risk + 0.3 * budget_risk + 0.2 * distance_risk
     return min(100, int(score))
 
 def explain_risk(row):
-    stock_risk   = max(0, 100 - row['StockLevel'] * 5)
-    budget_risk  = max(0, 100 - row['Budget_INR'] / 5000)
+    stock_risk    = max(0, 100 - row['StockLevel'] * 5)
+    budget_risk   = max(0, 100 - row['Budget_INR'] / 5000)
     distance_risk = np.mean([
         get_distance(row['WarehouseID'], w) for w in df['WarehouseID'].unique()
     ]) / 50
-
-    stock_contrib   = int(0.5 * stock_risk)
-    budget_contrib  = int(0.3 * budget_risk)
-    dist_contrib    = int(0.2 * distance_risk)
-    total           = min(100, stock_contrib + budget_contrib + dist_contrib)
-
+    stock_contrib  = int(0.5 * stock_risk)
+    budget_contrib = int(0.3 * budget_risk)
+    dist_contrib   = int(0.2 * distance_risk)
+    total          = min(100, stock_contrib + budget_contrib + dist_contrib)
     lines = [
         f"**Total Risk Score: {total}/100**",
         f"- 📦 Stock shortage contributes **{stock_contrib} pts** (stock level: {row['StockLevel']})",
         f"- 💰 Budget stress contributes **{budget_contrib} pts** (budget: ₹{int(row['Budget_INR'])})",
         f"- 🗺️ Network distance contributes **{dist_contrib} pts** (avg road distance from warehouse)",
     ]
-
     if stock_risk > 60:
         lines.append("⚠️ *Low stock is the primary driver — consider reordering soon.*")
     if budget_risk > 60:
@@ -217,7 +259,6 @@ def explain_risk(row):
         lines.append("⚠️ *This warehouse is far from the network — freight costs will be high.*")
     if total < 30:
         lines.append("✅ *This warehouse is healthy across all dimensions.*")
-
     return "\n".join(lines)
 
 df['RiskScore'] = df.apply(compute_risk, axis=1)
@@ -246,7 +287,8 @@ reorder_plan = auto_reorder(df)
 m1, m2, m3 = st.columns(3)
 m1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
 m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-m3.metric("Transactions", len(st.session_state.transaction_history))
+txn_df_count = load_transactions()
+m3.metric("Transactions", len(txn_df_count))
 
 # =========================
 # 10. AUTO REORDER DISPLAY
@@ -310,24 +352,25 @@ if target_sku:
                 default_qty = min(max_affordable, s['StockLevel'], 5)
                 c1.write(f"### {s['WarehouseID']}")
                 c1.write(f"Stock: {s['StockLevel']}")
-                c1.write(f"Distance: {dist} km (via OSRM road distance)")
+                c1.write(f"Distance: {dist} km (OSRM)")
 
-                safe_max = max(0, int(s['StockLevel']))
+                safe_max     = max(0, int(s['StockLevel']))
                 safe_default = min(int(default_qty), safe_max) if safe_max > 0 else 0
 
                 qty = c2.number_input(
                     "Qty", min_value=0, max_value=safe_max,
                     value=safe_default, key=f"q_{idx}"
                 )
-                prod = qty * unit_price
+                prod    = qty * unit_price
                 freight = int(qty * dist * ship_rate)
-                total = prod + freight
+                total   = prod + freight
                 c2.write(f"Product ₹{prod}")
                 c2.write(f"Freight ₹{freight}")
                 c2.write(f"Total ₹{total}")
 
                 if c3.button("Confirm", key=f"b_{idx}"):
                     if qty > 0 and total <= target_row['Budget_INR']:
+
                         st.session_state.df.loc[
                             st.session_state.df['ProductID'] == target_sku, 'StockLevel'
                         ] += qty
@@ -336,18 +379,100 @@ if target_sku:
                         ] -= total
                         st.session_state.df.loc[s.name, 'StockLevel'] -= qty
                         st.session_state.df.loc[s.name, 'Budget_INR'] += prod
-                        st.session_state.transaction_history.append({
-                            "sku": target_sku,
-                            "from": s['WarehouseID'],
-                            "qty": qty,
-                            "cost": total
-                        })
+
+                        new_to_stock   = int(st.session_state.df.loc[
+                            st.session_state.df['ProductID'] == target_sku, 'StockLevel'
+                        ].values[0])
+                        new_to_budget  = int(st.session_state.df.loc[
+                            st.session_state.df['ProductID'] == target_sku, 'Budget_INR'
+                        ].values[0])
+                        new_from_stock  = int(st.session_state.df.loc[s.name, 'StockLevel'])
+                        new_from_budget = int(st.session_state.df.loc[s.name, 'Budget_INR'])
+
                         save_data(st.session_state.df)
+                        save_transaction(
+                            sku=target_sku,
+                            from_wh=s['WarehouseID'],
+                            to_wh=target_row['WarehouseID'],
+                            qty=qty,
+                            unit_price=unit_price,
+                            freight=freight,
+                            total=total,
+                            from_stock_after=new_from_stock,
+                            to_stock_after=new_to_stock,
+                            from_budget_after=new_from_budget,
+                            to_budget_after=new_to_budget
+                        )
+
                         st.success("Done")
                         st.rerun()
 
 # =========================
-# 13. CATEGORY LEDGER
+# 13. TRANSACTION HISTORY LEDGER
+# =========================
+st.write("---")
+st.subheader("📒 Transaction History Ledger")
+
+txn_df = load_transactions()
+
+if txn_df.empty:
+    st.info("No transactions yet.")
+else:
+    st.caption(f"Total transactions recorded: {len(txn_df)}")
+
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        all_skus = ["All"] + sorted(txn_df['sku'].unique().tolist())
+        filter_sku = st.selectbox("Filter by SKU", all_skus)
+    with filter_col2:
+        all_wh = ["All"] + sorted(
+            pd.concat([txn_df['from_warehouse'], txn_df['to_warehouse']]).unique().tolist()
+        )
+        filter_wh = st.selectbox("Filter by Warehouse", all_wh)
+
+    filtered = txn_df.copy()
+    if filter_sku != "All":
+        filtered = filtered[filtered['sku'] == filter_sku]
+    if filter_wh != "All":
+        filtered = filtered[
+            (filtered['from_warehouse'] == filter_wh) |
+            (filtered['to_warehouse'] == filter_wh)
+        ]
+
+    st.caption(f"Showing {len(filtered)} transaction(s)")
+
+    for _, txn in filtered.iterrows():
+        label = (
+            f"🧾 #{txn['id']} | {txn['timestamp']} | "
+            f"{txn['sku']} | {txn['from_warehouse']} → {txn['to_warehouse']} | "
+            f"Qty: {txn['qty']} | ₹{txn['total_cost']:,}"
+        )
+        with st.expander(label):
+            d1, d2 = st.columns(2)
+
+            with d1:
+                st.markdown("**📤 Sender Warehouse**")
+                st.markdown(f"- Warehouse: `{txn['from_warehouse']}`")
+                st.markdown(f"- Units dispatched: `{txn['qty']}`")
+                st.markdown(f"- Stock after: `{txn['from_stock_after']}`")
+                st.markdown(f"- Budget after: `₹{txn['from_budget_after']:,}`")
+
+            with d2:
+                st.markdown("**📥 Receiver Warehouse**")
+                st.markdown(f"- Warehouse: `{txn['to_warehouse']}`")
+                st.markdown(f"- Units received: `{txn['qty']}`")
+                st.markdown(f"- Stock after: `{txn['to_stock_after']}`")
+                st.markdown(f"- Budget after: `₹{txn['to_budget_after']:,}`")
+
+            st.markdown("---")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Unit Price", f"₹{txn['unit_price']:,}")
+            b2.metric("Freight Cost", f"₹{txn['freight_cost']:,}")
+            b3.metric("Product Cost", f"₹{txn['qty'] * txn['unit_price']:,}")
+            b4.metric("Total Cost", f"₹{txn['total_cost']:,}")
+
+# =========================
+# 14. CATEGORY LEDGER
 # =========================
 st.write("---")
 st.subheader("📋 Category Ledger")
