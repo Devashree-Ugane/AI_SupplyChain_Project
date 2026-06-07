@@ -5,5 +5,5 @@ faiss-cpu
 sentence-transformers
 plotly
 groq
-streamlit-authenticator
+streamlit-authenticator==0.3.3
 scikit-learn
