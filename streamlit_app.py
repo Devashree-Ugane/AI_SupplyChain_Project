@@ -54,7 +54,12 @@ authenticator = stauth.Authenticate(
     cookie_config["expiry_days"]
 )
 
-name, authentication_status, username = authenticator.login("Login", "main")
+login_result = authenticator.login(location="main")
+
+if login_result is not None:
+    name, authentication_status, username = login_result
+else:
+    name, authentication_status, username = None, None, None
 
 if authentication_status is False:
     st.error("Incorrect username or password")
@@ -79,7 +84,7 @@ with col_user1:
     else:
         st.warning(f"👁️ Logged in as **{name}** — Role: `Viewer` (Read Only)")
 with col_user2:
-    authenticator.logout("Logout", "main")
+    authenticator.logout(location="main")
 
 # =========================
 # 3. CITY COORDINATES
@@ -582,7 +587,7 @@ if selected_sku:
             forecast_table["Exp Smoothing"]       = es_forecast
         if method in ["All Three", "Linear Regression"]:
             forecast_table["Linear Regression"]   = lr_forecast
-        st.dataframe(forecast_table, width='stretch')
+        st.dataframe(forecast_table, use_container_width=True)
 
 # =========================
 # 15. SEARCH + TRANSACTIONS (admin + analyst only)
@@ -747,4 +752,4 @@ for cat in df['Category'].unique():
             return ['background-color: rgba(255, 0, 0, 0.12)'] * len(row)
         return [''] * len(row)
 
-    st.dataframe(cat_df.style.apply(highlight, axis=1), width='stretch')
+    st.dataframe(cat_df.style.apply(highlight, axis=1), use_container_width=True)
