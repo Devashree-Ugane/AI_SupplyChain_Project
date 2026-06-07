@@ -54,7 +54,7 @@ authenticator = stauth.Authenticate(
     cookie_config["expiry_days"]
 )
 
-login_result = authenticator.login(location="main")
+login_result = authenticator.login()
 
 if login_result is not None:
     name, authentication_status, username = login_result
@@ -84,7 +84,8 @@ with col_user1:
     else:
         st.warning(f"👁️ Logged in as **{name}** — Role: `Viewer` (Read Only)")
 with col_user2:
-    authenticator.logout(location="main")
+    authenticator.logout()
+
 
 # =========================
 # 3. CITY COORDINATES
