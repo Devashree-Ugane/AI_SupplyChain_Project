@@ -25,17 +25,17 @@ credentials = {
     "usernames": {
         "admin": {
             "name": "Admin User",
-            "password": stauth.Hasher(["admin123"]).generate()[0],
+            "password": stauth.Hasher.hash("admin123"),
             "role": "admin"
         },
         "analyst": {
             "name": "Analyst User",
-            "password": stauth.Hasher(["analyst123"]).generate()[0],
+            "password": stauth.Hasher.hash("analyst123"),
             "role": "analyst"
         },
         "viewer": {
             "name": "Viewer User",
-            "password": stauth.Hasher(["viewer123"]).generate()[0],
+            "password": stauth.Hasher.hash("viewer123"),
             "role": "viewer"
         }
     }
