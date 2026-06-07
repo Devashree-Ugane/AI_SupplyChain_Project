@@ -21,21 +21,23 @@ CSV_FILE = "orders.csv"
 # =========================
 # 2. AUTHENTICATION
 # =========================
+hashed_passwords = stauth.Hasher(["admin123", "analyst123", "viewer123"]).generate()
+
 credentials = {
     "usernames": {
         "admin": {
             "name": "Admin User",
-            "password": stauth.Hasher.hash("admin123"),
+            "password": hashed_passwords[0],
             "role": "admin"
         },
         "analyst": {
             "name": "Analyst User",
-            "password": stauth.Hasher.hash("analyst123"),
+            "password": hashed_passwords[1],
             "role": "analyst"
         },
         "viewer": {
             "name": "Viewer User",
-            "password": stauth.Hasher.hash("viewer123"),
+            "password": hashed_passwords[2],
             "role": "viewer"
         }
     }
@@ -54,7 +56,7 @@ authenticator = stauth.Authenticate(
     cookie_config["expiry_days"]
 )
 
-login_result = authenticator.login()
+login_result = authenticator.login(location="main")
 
 if login_result is not None:
     name, authentication_status, username = login_result
@@ -84,8 +86,7 @@ with col_user1:
     else:
         st.warning(f"👁️ Logged in as **{name}** — Role: `Viewer` (Read Only)")
 with col_user2:
-    authenticator.logout()
-
+    authenticator.logout(location="main")
 
 # =========================
 # 3. CITY COORDINATES
