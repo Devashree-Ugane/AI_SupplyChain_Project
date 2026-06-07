@@ -6,7 +6,6 @@ import numpy as np
 import sqlite3
 import requests
 import time
-import json
 
 # =========================
 # 1. SETUP
@@ -31,11 +30,11 @@ CITY_COORDS = {
 }
 
 FALLBACK_DISTANCE_MAP = {
-    'Mumbai': {'Delhi': 1400, 'Bangalore': 1000, 'Pune': 150, 'Chennai': 1300, 'Kolkata': 1900},
-    'Delhi': {'Mumbai': 1400, 'Bangalore': 2100, 'Pune': 1450, 'Chennai': 2200, 'Kolkata': 1500},
-    'Bangalore': {'Mumbai': 1000, 'Delhi': 2100, 'Pune': 850, 'Chennai': 350, 'Kolkata': 1800},
-    'Pune': {'Mumbai': 150, 'Delhi': 1450, 'Bangalore': 850, 'Chennai': 1200, 'Kolkata': 1850},
-    'Chennai': {'Mumbai': 1300, 'Delhi': 2200, 'Bangalore': 350, 'Pune': 1200, 'Kolkata': 1600}
+    'Mumbai':    {'Delhi': 1400, 'Bangalore': 1000, 'Pune': 150,  'Chennai': 1300, 'Kolkata': 1900},
+    'Delhi':     {'Mumbai': 1400,'Bangalore': 2100, 'Pune': 1450, 'Chennai': 2200, 'Kolkata': 1500},
+    'Bangalore': {'Mumbai': 1000,'Delhi': 2100,     'Pune': 850,  'Chennai': 350,  'Kolkata': 1800},
+    'Pune':      {'Mumbai': 150, 'Delhi': 1450,     'Bangalore': 850,'Chennai': 1200,'Kolkata': 1850},
+    'Chennai':   {'Mumbai': 1300,'Delhi': 2200,     'Bangalore': 350,'Pune': 1200,  'Kolkata': 1600}
 }
 
 # =========================
@@ -153,9 +152,9 @@ def save_transaction(sku, from_wh, to_wh, qty, unit_price, freight, total,
     """, (
         pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         sku, from_wh, to_wh,
-        qty, unit_price, freight, total,
-        from_stock_after, to_stock_after,
-        from_budget_after, to_budget_after
+        int(qty), int(unit_price), int(freight), int(total),
+        int(from_stock_after), int(to_stock_after),
+        int(from_budget_after), int(to_budget_after)
     ))
     conn.commit()
     conn.close()
@@ -227,8 +226,8 @@ df = st.session_state.df
 # 8. EXPLAINABLE RISK SCORE ENGINE + AUTO REORDER
 # =========================
 def compute_risk(row):
-    stock_risk = max(0, 100 - row['StockLevel'] * 5)
-    budget_risk = max(0, 100 - row['Budget_INR'] / 5000)
+    stock_risk    = max(0, 100 - row['StockLevel'] * 5)
+    budget_risk   = max(0, 100 - row['Budget_INR'] / 5000)
     distance_risk = np.mean([
         get_distance(row['WarehouseID'], w) for w in df['WarehouseID'].unique()
     ]) / 50
@@ -273,7 +272,7 @@ def auto_reorder(df):
             ]
             if not suppliers.empty:
                 best = suppliers.sort_values('StockLevel', ascending=False).iloc[0]
-                qty = min(20, int(best['StockLevel'] * 0.1))
+                qty  = min(20, int(best['StockLevel'] * 0.1))
                 suggestions.append(
                     f"{row['WarehouseID']} should request {qty} units from {best['WarehouseID']}"
                 )
@@ -285,10 +284,9 @@ reorder_plan = auto_reorder(df)
 # 9. METRICS
 # =========================
 m1, m2, m3 = st.columns(3)
-m1.metric("Network Liquidity", f"₹{df['Budget_INR'].sum():,}")
-m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-txn_df_count = load_transactions()
-m3.metric("Transactions", len(txn_df_count))
+m1.metric("Network Liquidity",      f"₹{df['Budget_INR'].sum():,}")
+m2.metric("Inventory Asset Value",  f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
+m3.metric("Transactions",           len(load_transactions()))
 
 # =========================
 # 10. AUTO REORDER DISPLAY
@@ -343,13 +341,13 @@ if target_sku:
         for idx, s in suppliers.iterrows():
             with st.container(border=True):
                 c1, c2, c3 = st.columns([2, 1, 1])
-                unit_price = target_row['Unit_Price_INR']
-                dist = s['Distance']
-                ship_rate = 0.75
+                unit_price    = target_row['Unit_Price_INR']
+                dist          = s['Distance']
+                ship_rate     = 0.75
                 max_affordable = int(
                     target_row['Budget_INR'] // (unit_price + dist * ship_rate)
                 )
-                default_qty = min(max_affordable, s['StockLevel'], 5)
+                default_qty  = min(max_affordable, s['StockLevel'], 5)
                 c1.write(f"### {s['WarehouseID']}")
                 c1.write(f"Stock: {s['StockLevel']}")
                 c1.write(f"Distance: {dist} km (OSRM)")
@@ -380,10 +378,10 @@ if target_sku:
                         st.session_state.df.loc[s.name, 'StockLevel'] -= qty
                         st.session_state.df.loc[s.name, 'Budget_INR'] += prod
 
-                        new_to_stock   = int(st.session_state.df.loc[
+                        new_to_stock    = int(st.session_state.df.loc[
                             st.session_state.df['ProductID'] == target_sku, 'StockLevel'
                         ].values[0])
-                        new_to_budget  = int(st.session_state.df.loc[
+                        new_to_budget   = int(st.session_state.df.loc[
                             st.session_state.df['ProductID'] == target_sku, 'Budget_INR'
                         ].values[0])
                         new_from_stock  = int(st.session_state.df.loc[s.name, 'StockLevel'])
@@ -403,7 +401,6 @@ if target_sku:
                             from_budget_after=new_from_budget,
                             to_budget_after=new_to_budget
                         )
-
                         st.success("Done")
                         st.rerun()
 
@@ -422,10 +419,10 @@ else:
 
     filter_col1, filter_col2 = st.columns(2)
     with filter_col1:
-        all_skus = ["All"] + sorted(txn_df['sku'].unique().tolist())
+        all_skus   = ["All"] + sorted(txn_df['sku'].unique().tolist())
         filter_sku = st.selectbox("Filter by SKU", all_skus)
     with filter_col2:
-        all_wh = ["All"] + sorted(
+        all_wh    = ["All"] + sorted(
             pd.concat([txn_df['from_warehouse'], txn_df['to_warehouse']]).unique().tolist()
         )
         filter_wh = st.selectbox("Filter by Warehouse", all_wh)
@@ -436,16 +433,26 @@ else:
     if filter_wh != "All":
         filtered = filtered[
             (filtered['from_warehouse'] == filter_wh) |
-            (filtered['to_warehouse'] == filter_wh)
+            (filtered['to_warehouse']   == filter_wh)
         ]
 
     st.caption(f"Showing {len(filtered)} transaction(s)")
 
     for _, txn in filtered.iterrows():
+        txn_id          = int(txn['id'])
+        txn_qty         = int(txn['qty'])
+        txn_total       = int(txn['total_cost'])
+        txn_unit        = int(txn['unit_price'])
+        txn_freight     = int(txn['freight_cost'])
+        txn_from_stock  = int(txn['from_stock_after'])
+        txn_to_stock    = int(txn['to_stock_after'])
+        txn_from_budget = int(txn['from_budget_after'])
+        txn_to_budget   = int(txn['to_budget_after'])
+
         label = (
-            f"🧾 #{txn['id']} | {txn['timestamp']} | "
+            f"🧾 #{txn_id} | {txn['timestamp']} | "
             f"{txn['sku']} | {txn['from_warehouse']} → {txn['to_warehouse']} | "
-            f"Qty: {txn['qty']} | ₹{txn['total_cost']:,}"
+            f"Qty: {txn_qty} | ₹{txn_total:,}"
         )
         with st.expander(label):
             d1, d2 = st.columns(2)
@@ -453,23 +460,23 @@ else:
             with d1:
                 st.markdown("**📤 Sender Warehouse**")
                 st.markdown(f"- Warehouse: `{txn['from_warehouse']}`")
-                st.markdown(f"- Units dispatched: `{txn['qty']}`")
-                st.markdown(f"- Stock after: `{txn['from_stock_after']}`")
-                st.markdown(f"- Budget after: `₹{txn['from_budget_after']:,}`")
+                st.markdown(f"- Units dispatched: `{txn_qty}`")
+                st.markdown(f"- Stock after: `{txn_from_stock}`")
+                st.markdown(f"- Budget after: `₹{txn_from_budget:,}`")
 
             with d2:
                 st.markdown("**📥 Receiver Warehouse**")
                 st.markdown(f"- Warehouse: `{txn['to_warehouse']}`")
-                st.markdown(f"- Units received: `{txn['qty']}`")
-                st.markdown(f"- Stock after: `{txn['to_stock_after']}`")
-                st.markdown(f"- Budget after: `₹{txn['to_budget_after']:,}`")
+                st.markdown(f"- Units received: `{txn_qty}`")
+                st.markdown(f"- Stock after: `{txn_to_stock}`")
+                st.markdown(f"- Budget after: `₹{txn_to_budget:,}`")
 
             st.markdown("---")
             b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Unit Price", f"₹{txn['unit_price']:,}")
-            b2.metric("Freight Cost", f"₹{txn['freight_cost']:,}")
-            b3.metric("Product Cost", f"₹{txn['qty'] * txn['unit_price']:,}")
-            b4.metric("Total Cost", f"₹{txn['total_cost']:,}")
+            b1.metric("Unit Price",    f"₹{txn_unit:,}")
+            b2.metric("Freight Cost",  f"₹{txn_freight:,}")
+            b3.metric("Product Cost",  f"₹{txn_qty * txn_unit:,}")
+            b4.metric("Total Cost",    f"₹{txn_total:,}")
 
 # =========================
 # 14. CATEGORY LEDGER
@@ -486,4 +493,4 @@ for cat in df['Category'].unique():
             return ['background-color: rgba(255, 0, 0, 0.12)'] * len(row)
         return [''] * len(row)
 
-    st.dataframe(cat_df.style.apply(highlight, axis=1), use_container_width=True)
+    st.dataframe(cat_df.style.apply(highlight, axis=1), width='stretch')
