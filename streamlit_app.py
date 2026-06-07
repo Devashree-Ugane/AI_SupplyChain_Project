@@ -6,6 +6,7 @@ import numpy as np
 import sqlite3
 import requests
 import time
+import struct
 
 # =========================
 # 1. SETUP
@@ -161,7 +162,6 @@ def save_transaction(sku, from_wh, to_wh, qty, unit_price, freight, total,
 
 def safe_int(val):
     if isinstance(val, bytes):
-        import struct
         length = len(val)
         fmt = {1: 'b', 2: '<h', 4: '<i', 8: '<q'}.get(length)
         if fmt:
@@ -298,15 +298,71 @@ def auto_reorder(df):
 reorder_plan = auto_reorder(df)
 
 # =========================
-# 9. METRICS
+# 9. DEMAND FORECASTING ENGINE
 # =========================
-m1, m2, m3 = st.columns(3)
-m1.metric("Network Liquidity",      f"₹{df['Budget_INR'].sum():,}")
-m2.metric("Inventory Asset Value",  f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
-m3.metric("Transactions",           len(load_transactions()))
+def build_demand_series(sku):
+    """
+    Reconstructs a daily demand series for a SKU from transaction history.
+    Demand = qty dispatched (from_warehouse side) per day aggregated.
+    If insufficient history, synthetic baseline is generated for demo.
+    """
+    txn_df = load_transactions()
+
+    if not txn_df.empty and 'sku' in txn_df.columns:
+        sku_txns = txn_df[txn_df['sku'] == sku].copy()
+        if len(sku_txns) >= 3:
+            sku_txns['date'] = pd.to_datetime(sku_txns['timestamp']).dt.date
+            daily = sku_txns.groupby('date')['qty'].sum().reset_index()
+            daily.columns = ['date', 'demand']
+            daily = daily.sort_values('date')
+            return daily['demand'].tolist(), "real"
+
+    # Synthetic fallback — seeded by SKU so it's consistent per product
+    seed = sum(ord(c) for c in sku)
+    rng  = np.random.default_rng(seed)
+    base = rng.integers(5, 20)
+    synthetic = [max(0, int(base + rng.normal(0, 3))) for _ in range(14)]
+    return synthetic, "synthetic"
+
+def moving_average_forecast(series, window=3, steps=5):
+    series = list(series)
+    forecast = []
+    for _ in range(steps):
+        avg = np.mean(series[-window:])
+        forecast.append(round(avg, 2))
+        series.append(avg)
+    return forecast
+
+def exponential_smoothing_forecast(series, alpha=0.3, steps=5):
+    series = list(series)
+    smoothed = [series[0]]
+    for val in series[1:]:
+        smoothed.append(alpha * val + (1 - alpha) * smoothed[-1])
+    forecast = []
+    last = smoothed[-1]
+    for _ in range(steps):
+        last = alpha * last + (1 - alpha) * last
+        forecast.append(round(last, 2))
+    return forecast
+
+def days_until_stockout(current_stock, daily_demand_forecast):
+    stock = current_stock
+    for i, demand in enumerate(daily_demand_forecast):
+        stock -= demand
+        if stock <= 0:
+            return i + 1
+    return None
 
 # =========================
-# 10. AUTO REORDER DISPLAY
+# 10. METRICS
+# =========================
+m1, m2, m3 = st.columns(3)
+m1.metric("Network Liquidity",     f"₹{df['Budget_INR'].sum():,}")
+m2.metric("Inventory Asset Value", f"₹{(df['StockLevel'] * df['Unit_Price_INR']).sum():,}")
+m3.metric("Transactions",          len(load_transactions()))
+
+# =========================
+# 11. AUTO REORDER DISPLAY
 # =========================
 st.write("---")
 st.subheader("🔁 Auto Reorder AI System")
@@ -317,7 +373,7 @@ else:
     st.success("All warehouses are healthy")
 
 # =========================
-# 11. EXPLAINABLE RISK TABLE
+# 12. EXPLAINABLE RISK TABLE
 # =========================
 st.write("---")
 st.subheader("🧠 Explainable Risk Score")
@@ -332,7 +388,165 @@ for _, row in risk_df.head(10).iterrows():
         st.markdown(explain_risk(full_row))
 
 # =========================
-# 12. SEARCH + TRANSACTIONS
+# 13. DEMAND FORECASTING SECTION
+# =========================
+st.write("---")
+st.subheader("📈 Demand Forecasting & Stockout Prediction")
+
+st.caption(
+    "Uses **Moving Average** and **Exponential Smoothing** on transaction history "
+    "to forecast daily demand and predict when a SKU will stock out."
+)
+
+all_skus_list = sorted(df['ProductID'].unique().tolist())
+fc_col1, fc_col2, fc_col3 = st.columns([2, 1, 1])
+
+with fc_col1:
+    selected_sku = st.selectbox("Select SKU to Forecast", all_skus_list, key="fc_sku")
+with fc_col2:
+    method = st.selectbox("Forecasting Method", ["Both", "Moving Average", "Exponential Smoothing"], key="fc_method")
+with fc_col3:
+    forecast_days = st.slider("Forecast Days", min_value=3, max_value=14, value=7, key="fc_days")
+
+if selected_sku:
+    sku_row       = df[df['ProductID'] == selected_sku].iloc[0]
+    current_stock = int(sku_row['StockLevel'])
+    series, data_type = build_demand_series(selected_sku)
+
+    if data_type == "synthetic":
+        st.warning(
+            "⚠️ Insufficient real transaction data for this SKU. "
+            "Showing forecast on **synthetic baseline** for demonstration."
+        )
+    else:
+        st.success(f"✅ Forecasting from **{len(series)} real transaction data points**.")
+
+    ma_forecast  = moving_average_forecast(series, window=3, steps=forecast_days)
+    es_forecast  = exponential_smoothing_forecast(series, alpha=0.3, steps=forecast_days)
+
+    history_days = list(range(1, len(series) + 1))
+    future_days  = list(range(len(series) + 1, len(series) + forecast_days + 1))
+
+    # ---- Chart ----
+    chart_data = pd.DataFrame({
+        "Day": history_days + future_days,
+    })
+
+    history_series = pd.DataFrame({
+        "Day":    history_days,
+        "Actual Demand": series
+    })
+
+    ma_series = pd.DataFrame({
+        "Day":             future_days,
+        "Moving Avg (MA)": ma_forecast
+    })
+
+    es_series = pd.DataFrame({
+        "Day":              future_days,
+        "Exp Smoothing (ES)": es_forecast
+    })
+
+    import altair as alt
+
+    base_chart = alt.Chart(history_series).mark_line(
+        color='steelblue', strokeWidth=2
+    ).encode(
+        x=alt.X('Day:Q', title='Day'),
+        y=alt.Y('Actual Demand:Q', title='Units'),
+        tooltip=['Day', 'Actual Demand']
+    )
+
+    point_chart = alt.Chart(history_series).mark_point(
+        color='steelblue', filled=True, size=60
+    ).encode(
+        x='Day:Q',
+        y='Actual Demand:Q',
+        tooltip=['Day', 'Actual Demand']
+    )
+
+    charts = [base_chart + point_chart]
+
+    if method in ["Both", "Moving Average"]:
+        ma_chart = alt.Chart(ma_series).mark_line(
+            color='orange', strokeDash=[6, 3], strokeWidth=2
+        ).encode(
+            x='Day:Q',
+            y='Moving Avg (MA):Q',
+            tooltip=['Day', 'Moving Avg (MA)']
+        )
+        ma_points = alt.Chart(ma_series).mark_point(
+            color='orange', filled=True, size=60
+        ).encode(
+            x='Day:Q',
+            y='Moving Avg (MA):Q'
+        )
+        charts.append(ma_chart + ma_points)
+
+    if method in ["Both", "Exponential Smoothing"]:
+        es_chart = alt.Chart(es_series).mark_line(
+            color='green', strokeDash=[4, 2], strokeWidth=2
+        ).encode(
+            x='Day:Q',
+            y='Exp Smoothing (ES):Q',
+            tooltip=['Day', 'Exp Smoothing (ES)']
+        )
+        es_points = alt.Chart(es_series).mark_point(
+            color='green', filled=True, size=60
+        ).encode(
+            x='Day:Q',
+            y='Exp Smoothing (ES):Q'
+        )
+        charts.append(es_chart + es_points)
+
+    final_chart = alt.layer(*charts).properties(
+        title=f"Demand Forecast — {selected_sku}",
+        height=350
+    ).configure_title(fontSize=15)
+
+    st.altair_chart(final_chart, use_container_width=True)
+
+    # ---- Stockout Prediction ----
+    st.markdown("#### 🚨 Stockout Prediction")
+    so_col1, so_col2, so_col3 = st.columns(3)
+
+    so_col1.metric("Current Stock", f"{current_stock} units")
+
+    if method in ["Both", "Moving Average"]:
+        days_ma = days_until_stockout(current_stock, ma_forecast)
+        if days_ma:
+            so_col2.metric(
+                "MA Stockout In",
+                f"{days_ma} day(s)",
+                delta="⚠️ Reorder Soon" if days_ma <= 3 else "🟡 Monitor",
+                delta_color="inverse"
+            )
+        else:
+            so_col2.metric("MA Stockout", "Safe for forecast window ✅")
+
+    if method in ["Both", "Exponential Smoothing"]:
+        days_es = days_until_stockout(current_stock, es_forecast)
+        if days_es:
+            so_col3.metric(
+                "ES Stockout In",
+                f"{days_es} day(s)",
+                delta="⚠️ Reorder Soon" if days_es <= 3 else "🟡 Monitor",
+                delta_color="inverse"
+            )
+        else:
+            so_col3.metric("ES Stockout", "Safe for forecast window ✅")
+
+    # ---- Forecast Table ----
+    with st.expander("📊 View Forecast Numbers"):
+        forecast_table = pd.DataFrame({"Day": future_days})
+        if method in ["Both", "Moving Average"]:
+            forecast_table["Moving Avg Forecast"] = ma_forecast
+        if method in ["Both", "Exponential Smoothing"]:
+            forecast_table["Exp Smoothing Forecast"] = es_forecast
+        st.dataframe(forecast_table, width='stretch')
+
+# =========================
+# 14. SEARCH + TRANSACTIONS
 # =========================
 st.write("---")
 st.subheader("🔍 Strategic Sourcing")
@@ -357,7 +571,7 @@ if target_sku:
 
         for idx, s in suppliers.iterrows():
             with st.container(border=True):
-                c1, c2, c3 = st.columns([2, 1, 1])
+                c1, c2, c3    = st.columns([2, 1, 1])
                 unit_price    = target_row['Unit_Price_INR']
                 dist          = s['Distance']
                 ship_rate     = 0.75
@@ -422,7 +636,7 @@ if target_sku:
                         st.rerun()
 
 # =========================
-# 13. TRANSACTION HISTORY LEDGER
+# 15. TRANSACTION HISTORY LEDGER
 # =========================
 st.write("---")
 st.subheader("📒 Transaction History Ledger")
@@ -490,13 +704,13 @@ else:
 
             st.markdown("---")
             b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Unit Price",    f"₹{txn_unit:,}")
-            b2.metric("Freight Cost",  f"₹{txn_freight:,}")
-            b3.metric("Product Cost",  f"₹{txn_qty * txn_unit:,}")
-            b4.metric("Total Cost",    f"₹{txn_total:,}")
+            b1.metric("Unit Price",   f"₹{txn_unit:,}")
+            b2.metric("Freight Cost", f"₹{txn_freight:,}")
+            b3.metric("Product Cost", f"₹{txn_qty * txn_unit:,}")
+            b4.metric("Total Cost",   f"₹{txn_total:,}")
 
 # =========================
-# 14. CATEGORY LEDGER
+# 16. CATEGORY LEDGER
 # =========================
 st.write("---")
 st.subheader("📋 Category Ledger")
