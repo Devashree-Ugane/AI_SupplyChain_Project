@@ -4,7 +4,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import sqlite3
-
+import requests
+import random
 # =========================
 # 1. SETUP
 # =========================
@@ -18,18 +19,39 @@ CSV_FILE = "orders.csv"
 # =========================
 # 2. DISTANCE MAP
 # =========================
-DISTANCE_MAP = {
-    'Mumbai': {'Delhi': 1400, 'Bangalore': 1000, 'Pune': 150, 'Chennai': 1300, 'Kolkata': 1900},
-    'Delhi': {'Mumbai': 1400, 'Bangalore': 2100, 'Pune': 1450, 'Chennai': 2200, 'Kolkata': 1500},
-    'Bangalore': {'Mumbai': 1000, 'Delhi': 2100, 'Pune': 850, 'Chennai': 350, 'Kolkata': 1800},
-    'Pune': {'Mumbai': 150, 'Delhi': 1450, 'Bangalore': 850, 'Chennai': 1200, 'Kolkata': 1850},
-    'Chennai': {'Mumbai': 1300, 'Delhi': 2200, 'Bangalore': 350, 'Pune': 1200, 'Kolkata': 1600}
+CITY_COORDS = {
+    "Mumbai": (19.0760, 72.8777),
+    "Delhi": (28.6139, 77.2090),
+    "Bangalore": (12.9716, 77.5946),
+    "Pune": (18.5204, 73.8567),
+    "Chennai": (13.0827, 80.2707)
 }
 
 def get_distance(c1, c2):
+
     if c1 == c2:
         return 0
-    return DISTANCE_MAP.get(c1, {}).get(c2, 800)
+
+    try:
+
+        lat1, lon1 = CITY_COORDS[c1]
+        lat2, lon2 = CITY_COORDS[c2]
+
+        url = (
+            f"https://router.project-osrm.org/route/v1/driving/"
+            f"{lon1},{lat1};{lon2},{lat2}?overview=false"
+        )
+
+        response = requests.get(url, timeout=5)
+
+        distance_km = (
+            response.json()["routes"][0]["distance"] / 1000
+        )
+
+        return round(distance_km)
+
+    except:
+        return 800
 
 # =========================
 # 3. SQLITE SETUP
@@ -116,21 +138,77 @@ if 'transaction_history' not in st.session_state:
     st.session_state.transaction_history = []
 
 df = st.session_state.df
+st.write("---")
+st.subheader("🔄 Dynamic Operations Simulator")
 
+if st.button("Simulate New Day"):
+
+    for idx in df.index:
+
+        consumption = random.randint(0, 5)
+
+        df.loc[idx, "StockLevel"] = max(
+            0,
+            df.loc[idx, "StockLevel"] - consumption
+        )
+
+        df.loc[idx, "Budget_INR"] += random.randint(
+            -5000,
+            10000
+        )
+
+    save_data(df)
+
+    st.success("New operational day simulated")
+
+    st.rerun()
 # =========================
 # 6. RISK SCORE ENGINE + AUTO REORDER (NEW)
 # =========================
 def compute_risk(row):
-    stock_risk = max(0, 100 - row['StockLevel'] * 5)
-    budget_risk = max(0, 100 - row['Budget_INR'] / 5000)
-    distance_risk = np.mean([
-        get_distance(row['WarehouseID'], w) for w in df['WarehouseID'].unique()
+
+    stock_component = max(
+        0,
+        100 - row['StockLevel'] * 5
+    )
+
+    budget_component = max(
+        0,
+        100 - row['Budget_INR'] / 5000
+    )
+
+    distance_component = np.mean([
+        get_distance(
+            row['WarehouseID'],
+            w
+        )
+        for w in df['WarehouseID'].unique()
     ]) / 50
 
-    score = 0.5 * stock_risk + 0.3 * budget_risk + 0.2 * distance_risk
-    return min(100, int(score))
+    score = (
+        0.5 * stock_component +
+        0.3 * budget_component +
+        0.2 * distance_component
+    )
 
-df['RiskScore'] = df.apply(compute_risk, axis=1)
+    return pd.Series([
+        min(100, int(score)),
+        int(stock_component),
+        int(budget_component),
+        int(distance_component)
+    ])
+
+df[
+    [
+        'RiskScore',
+        'StockRisk',
+        'BudgetRisk',
+        'DistanceRisk'
+    ]
+] = df.apply(
+    compute_risk,
+    axis=1
+)
 
 def auto_reorder(df):
     suggestions = []
@@ -272,6 +350,32 @@ if target_sku:
                         save_data(st.session_state.df)
                         st.success("Done")
                         st.rerun()
+
+
+
+st.write("---")
+st.subheader("🧠 Explainable AI Risk Analysis")
+
+high_risk = df.sort_values(
+    "RiskScore",
+    ascending=False
+).head(5)
+
+for _, row in high_risk.iterrows():
+
+    st.warning(
+        f"""
+Warehouse: {row['WarehouseID']}
+
+Risk Score: {row['RiskScore']}/100
+
+Stock Risk Contribution: {row['StockRisk']}
+
+Budget Risk Contribution: {row['BudgetRisk']}
+
+Distance Risk Contribution: {row['DistanceRisk']}
+"""
+    )
 
 # =========================
 # 10. CATEGORY LEDGER
