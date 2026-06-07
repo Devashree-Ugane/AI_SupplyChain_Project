@@ -177,13 +177,7 @@ def compute_risk(row):
         100 - row['Budget_INR'] / 5000
     )
 
-    distance_component = np.mean([
-        get_distance(
-            row['WarehouseID'],
-            w
-        )
-        for w in df['WarehouseID'].unique()
-    ]) / 50
+    distance_component = 15
 
     score = (
         0.5 * stock_component +
