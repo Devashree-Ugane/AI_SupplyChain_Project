@@ -159,10 +159,27 @@ def save_transaction(sku, from_wh, to_wh, qty, unit_price, freight, total,
     conn.commit()
     conn.close()
 
+def safe_int(val):
+    if isinstance(val, bytes):
+        import struct
+        length = len(val)
+        fmt = {1: 'b', 2: '<h', 4: '<i', 8: '<q'}.get(length)
+        if fmt:
+            return struct.unpack(fmt, val)[0]
+        return int.from_bytes(val, byteorder='little', signed=True)
+    try:
+        return int(val)
+    except Exception:
+        return 0
+
 def load_transactions():
     conn = get_conn()
     try:
         df = pd.read_sql("SELECT * FROM transactions ORDER BY id DESC", conn)
+        for col in ['id','qty','unit_price','freight_cost','total_cost',
+                    'from_stock_after','to_stock_after','from_budget_after','to_budget_after']:
+            if col in df.columns:
+                df[col] = df[col].apply(safe_int)
     except Exception:
         df = pd.DataFrame()
     conn.close()
